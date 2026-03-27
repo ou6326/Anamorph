@@ -1,0 +1,39 @@
+[package]
+name = "anamorph"
+version = "0.1.0"
+edition = "2021"
+description = "Unsynchronized Robustly Anamorphic ElGamal — COMP6453 Applied Cryptography Project"
+license = "MIT"
+
+[dependencies]
+# Arbitrary-precision integers with random generation support
+num-bigint = { version = "0.4", features = ["rand"] }
+num-traits = "0.2"
+num-integer = "0.1"
+
+# Cryptographically secure RNG
+rand = "0.8"
+
+# HMAC-SHA256 integrity (Owen's hardening layer)
+hmac = "0.12"
+sha2 = "0.10"
+
+# Constant-time primitives (Owen's ct.rs)
+subtle = "2.5"
+
+# Secure memory zeroing
+zeroize = { version = "1.7", features = ["derive"] }
+
+# Memory-hard KDF for double-key derivation
+argon2 = "0.5"
+
+# Serialization for key/ciphertext transport
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1"
+
+[[bench]]
+name = "throughput"
+harness = false
