@@ -18,8 +18,9 @@ fn test_keygen_produces_valid_keys() {
         .expect("public key h not in group");
 
     // x must be in [1, q-1]
-    assert!(sk.x >= BigUint::one(), "secret key x < 1");
-    assert!(sk.x < sk.params.q, "secret key x >= q");
+    let x = BigUint::from_bytes_be(&sk.x.to_be_bytes());
+    assert!(x >= BigUint::one(), "secret key x < 1");
+    assert!(x < sk.params.q, "secret key x >= q");
 }
 
 /// Encrypt-then-decrypt roundtrip for a simple ASCII message.

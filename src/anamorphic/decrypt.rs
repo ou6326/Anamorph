@@ -50,7 +50,8 @@ pub fn adecrypt(
     let normal_msg = decrypt(sk, ct)?;
 
     let r = derive_randomness(dk, candidate_covert, &sk.params.q);
-    let expected_c1 = sk.params.g.modpow(&r, &sk.params.p);
+    let r_big = BigUint::from_bytes_be(&r.to_be_bytes());
+    let expected_c1 = sk.params.g.modpow(&r_big, &sk.params.p);
 
     let covert_msg = if expected_c1 == ct.c1 {
         Some(candidate_covert.to_vec())
@@ -78,7 +79,8 @@ pub fn adecrypt_search(
 
     for candidate in candidates {
         let r = derive_randomness(dk, candidate, &sk.params.q);
-        let expected_c1 = sk.params.g.modpow(&r, &sk.params.p);
+        let r_big = BigUint::from_bytes_be(&r.to_be_bytes());
+        let expected_c1 = sk.params.g.modpow(&r_big, &sk.params.p);
 
         if expected_c1 == ct.c1 {
             return Ok(AnamorphicPlaintext {
@@ -205,7 +207,8 @@ pub fn verify_covert_presence(
     g: &BigUint,
 ) -> bool {
     let r = derive_randomness(dk, candidate_covert, q);
-    let expected_c1 = g.modpow(&r, p);
+    let r_big = BigUint::from_bytes_be(&r.to_be_bytes());
+    let expected_c1 = g.modpow(&r_big, p);
     expected_c1 == ct.c1
 }
 

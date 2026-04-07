@@ -22,11 +22,13 @@ fn test_akeygen_produces_double_key() {
         .expect("pk.h in group");
 
     // Double key exponent in valid range
-    assert!(dk.dk >= BigUint::from(1u32));
-    assert!(dk.dk < pk.params.q);
+    let dk_value = BigUint::from_bytes_be(&dk.dk.to_be_bytes());
+    assert!(dk_value >= BigUint::from(1u32));
+    assert!(dk_value < pk.params.q);
 
     // dk_pub = g^dk mod p
-    let expected_dk_pub = pk.params.g.modpow(&dk.dk, &pk.params.p);
+    let expected_dk_pub = anamorph::ct::ct_modpow_boxed(&pk.params.g, &dk.dk, &pk.params.p)
+        .expect("dk_pub");
     assert_eq!(dk.dk_pub, expected_dk_pub);
 
     // Keys share the same group params

@@ -6,10 +6,9 @@
 
 use num_bigint::{BigUint, RandBigInt};
 use num_traits::One;
-use rand::thread_rng;
 
-use crate::errors::{AnamorphError, Result};
 use super::keygen::PublicKey;
+use crate::errors::{AnamorphError, Result};
 
 /// ElGamal ciphertext `(c1, c2)`.
 ///
@@ -66,7 +65,7 @@ pub fn decode_message(m: &BigUint) -> Result<Vec<u8>> {
 /// Returns `Ciphertext { c1, c2 }`.
 pub fn encrypt(pk: &PublicKey, msg: &[u8]) -> Result<Ciphertext> {
     let m = encode_message(msg, &pk.params.p)?;
-    let mut rng = thread_rng();
+    let mut rng = rand::thread_rng();
     let r = rng.gen_biguint_range(&BigUint::one(), &pk.params.q);
     encrypt_with_randomness(pk, &m, &r)
 }
@@ -78,11 +77,7 @@ pub fn encrypt(pk: &PublicKey, msg: &[u8]) -> Result<Ciphertext> {
 /// double key + covert message).
 ///
 /// `m` must already be a valid encoded group element (see [`encode_message`]).
-pub fn encrypt_with_randomness(
-    pk: &PublicKey,
-    m: &BigUint,
-    r: &BigUint,
-) -> Result<Ciphertext> {
+pub fn encrypt_with_randomness(pk: &PublicKey, m: &BigUint, r: &BigUint) -> Result<Ciphertext> {
     let p = &pk.params.p;
     let g = &pk.params.g;
     let h = &pk.h;

@@ -20,8 +20,8 @@ rand = "0.8"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 
 # HMAC-SHA256 integrity (Owen's hardening layer)
-hmac = "0.12"
-sha2 = "0.10"
+hmac = { version = "0.13", features = ["zeroize"]}
+sha2 = { version = "0.11", features = ["zeroize"] }
 
 # Constant-time primitives (Owen's ct.rs)
 subtle = "2.5"

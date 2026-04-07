@@ -40,7 +40,7 @@
 //! assert_eq!(verify_mac(key, &data, &tag), Err(AnamorphError::IntegrityError));
 //! ```
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use zeroize::Zeroize;
 

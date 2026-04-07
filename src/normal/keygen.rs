@@ -3,12 +3,13 @@
 //! Produces a public key `(params, h = g^x mod p)` and a secret key `x`,
 //! where `x` is uniformly random in `[1, q-1]`.
 
-use num_bigint::{BigUint, RandBigInt};
-use num_traits::One;
-use rand::thread_rng;
+use crypto_bigint::{BoxedUint, NonZero, RandomMod};
+use num_bigint::BigUint;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::ct::ct_modpow_boxed;
 use crate::errors::Result;
-use crate::params::{generate_group_params, GroupParams};
+use crate::params::{generate_group_params, GroupParams, InfallibleSysRng};
 
 /// ElGamal public key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,14 +22,14 @@ pub struct PublicKey {
 
 /// ElGamal secret key.
 ///
-/// **Security note:** `x` should be zeroized after use.  Owen's hardening
-/// phase will add `#[derive(Zeroize, ZeroizeOnDrop)]`.
-#[derive(Debug, Clone)]
+/// `x` is zeroized on drop.
+#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SecretKey {
     /// Underlying group parameters (p, q, g).
+    #[zeroize(skip)]
     pub params: GroupParams,
     /// Secret exponent in `[1, q-1]`.
-    pub x: BigUint,
+    pub x: BoxedUint,
 }
 
 /// Standard ElGamal key generation.
@@ -50,14 +51,22 @@ pub fn keygen(bit_size: usize) -> Result<(PublicKey, SecretKey)> {
 /// Useful when multiple key pairs should share the same group, or for
 /// testing with fixed parameters.
 pub fn keygen_from_params(params: &GroupParams) -> Result<(PublicKey, SecretKey)> {
-    let mut rng = thread_rng();
-    let one = BigUint::one();
+    let mut rng = InfallibleSysRng::new();
+    let q_boxed = BoxedUint::from_be_slice_vartime(&params.q.to_bytes_be());
+    let q_nonzero = NonZero::new(q_boxed).expect("q must be non-zero");
 
     // x ← [1, q-1]
-    let x = rng.gen_biguint_range(&one, &params.q);
+    let x = loop {
+        let candidate = BoxedUint::try_random_mod_vartime(&mut rng, &q_nonzero)
+            .expect("system RNG failure");
+        if candidate.is_zero().into() {
+            continue;
+        }
+        break candidate;
+    };
 
     // h = g^x mod p
-    let h = params.g.modpow(&x, &params.p);
+    let h = ct_modpow_boxed(&params.g, &x, &params.p)?;
 
     let pk = PublicKey {
         params: params.clone(),
@@ -76,6 +85,7 @@ pub fn keygen_from_params(params: &GroupParams) -> Result<(PublicKey, SecretKey)
 mod tests {
     use super::*;
     use crate::params::validate_group_membership;
+    use num_traits::One;
 
     #[test]
     fn test_keygen_valid_public_key() {
@@ -88,8 +98,9 @@ mod tests {
     #[test]
     fn test_keygen_secret_key_in_range() {
         let (_pk, sk) = keygen(64).expect("keygen");
-        assert!(sk.x >= BigUint::one());
-        assert!(sk.x < sk.params.q);
+        let x = BigUint::from_bytes_be(&sk.x.to_be_bytes());
+        assert!(x >= BigUint::one());
+        assert!(x < sk.params.q);
     }
 
     #[test]

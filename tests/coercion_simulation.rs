@@ -244,12 +244,14 @@ fn test_different_dk_different_ct() {
     let (_, _, _dk2) = akeygen(64).expect("akeygen2");
     // dk2 won't share the same group params, so we use dk1's params but
     // vary the dk value.
+    use crypto_bigint::BoxedUint;
     use num_bigint::RandBigInt;
     use num_traits::One;
     let mut rng = rand::thread_rng();
     let dk2_val = rng.gen_biguint_range(&BigUint::one(), &pk.params.q);
+    let dk2 = BoxedUint::from_be_slice_vartime(&dk2_val.to_bytes_be());
     let dk2_pub = pk.params.g.modpow(&dk2_val, &pk.params.p);
-    let dk2 = anamorph::anamorphic::DoubleKey { dk: dk2_val, dk_pub: dk2_pub };
+    let dk2 = anamorph::anamorphic::DoubleKey { dk: dk2, dk_pub: dk2_pub };
 
     let ct1 = aencrypt(&pk, &dk1, b"msg", b"cov").expect("enc1");
     let ct2 = aencrypt(&pk, &dk2, b"msg", b"cov").expect("enc2");

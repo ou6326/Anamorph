@@ -7,13 +7,14 @@
 //! time.  The EC24 extension (implemented separately in `src/ec24/`) lifts this
 //! restriction to allow multi-use double keys.
 
-use num_bigint::{BigUint, RandBigInt};
-use num_traits::One;
-use rand::thread_rng;
+use crypto_bigint::{BoxedUint, NonZero, RandomMod};
+use num_bigint::BigUint;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::ct::ct_modpow_boxed;
 use crate::errors::Result;
 use crate::normal::keygen::{keygen_from_params, PublicKey, SecretKey};
-use crate::params::{generate_group_params, GroupParams};
+use crate::params::{generate_group_params, GroupParams, InfallibleSysRng};
 
 /// The anamorphic double key.
 ///
@@ -35,14 +36,15 @@ use crate::params::{generate_group_params, GroupParams};
 /// ciphertext `(c1, ...)` as:
 /// - Sender:   `shared = dk_pub^r = g^(dk·r) mod p`
 /// - Receiver: `shared = c1^dk = g^(r·dk) mod p`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct DoubleKey {
     /// The double-key secret exponent in `[1, q-1]`.
-    pub dk: BigUint,
+    pub dk: BoxedUint,
     /// The DH public value `g^dk mod p`.
     ///
     /// The sender uses this to compute the shared secret `dk_pub^r`
     /// for covert-message encryption.
+    #[zeroize(skip)]
     pub dk_pub: BigUint,
 }
 
@@ -57,7 +59,7 @@ impl DoubleKey {
     ///
     /// Both arrive at `g^(dk·r) mod p`.
     pub fn shared_secret(&self, ephemeral: &BigUint, p: &BigUint) -> BigUint {
-        ephemeral.modpow(&self.dk, p)
+        ct_modpow_boxed(ephemeral, &self.dk, p).expect("valid DH parameters")
     }
 }
 
@@ -81,12 +83,23 @@ pub fn akeygen_from_params(
 ) -> Result<(PublicKey, SecretKey, DoubleKey)> {
     let (pk, sk) = keygen_from_params(params)?;
 
-    let mut rng = thread_rng();
-    let dk_value = rng.gen_biguint_range(&BigUint::one(), &params.q);
-    let dk_pub = params.g.modpow(&dk_value, &params.p);
+    let mut rng = InfallibleSysRng::new();
+    let q_boxed = BoxedUint::from_be_slice_vartime(&params.q.to_bytes_be());
+    let q_nonzero = NonZero::new(q_boxed).expect("q must be non-zero");
+
+    let dk = loop {
+        let candidate = BoxedUint::try_random_mod_vartime(&mut rng, &q_nonzero)
+            .expect("system RNG failure");
+        if candidate.is_zero().into() {
+            continue;
+        }
+        break candidate;
+    };
+
+    let dk_pub = ct_modpow_boxed(&params.g, &dk, &params.p)?;
 
     let dk = DoubleKey {
-        dk: dk_value,
+        dk,
         dk_pub,
     };
 
@@ -96,7 +109,9 @@ pub fn akeygen_from_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_bigint::{BigUint, RandBigInt};
     use crate::params::validate_group_membership;
+    use num_traits::One;
 
     #[test]
     fn test_akeygen_produces_valid_keys() {
@@ -107,19 +122,21 @@ mod tests {
             .expect("h in group");
 
         // Secret key in range
-        assert!(sk.x >= BigUint::one());
-        assert!(sk.x < sk.params.q);
+        let x = BigUint::from_bytes_be(&sk.x.to_be_bytes());
+        assert!(x >= BigUint::one());
+        assert!(x < sk.params.q);
 
         // Double key exponent in range
-        assert!(dk.dk >= BigUint::one());
-        assert!(dk.dk < pk.params.q);
+        let dk_value = BigUint::from_bytes_be(&dk.dk.to_be_bytes());
+        assert!(dk_value >= BigUint::one());
+        assert!(dk_value < pk.params.q);
 
         // dk_pub = g^dk mod p must be in the group
         validate_group_membership(&dk.dk_pub, &pk.params.p, &pk.params.q)
             .expect("dk_pub in group");
 
         // Verify dk_pub = g^dk mod p
-        let expected_dk_pub = pk.params.g.modpow(&dk.dk, &pk.params.p);
+        let expected_dk_pub = ct_modpow_boxed(&pk.params.g, &dk.dk, &pk.params.p).expect("dk_pub");
         assert_eq!(dk.dk_pub, expected_dk_pub);
     }
 
@@ -129,11 +146,12 @@ mod tests {
         let (pk, _, dk) = akeygen_from_params(&params).expect("akeygen");
 
         assert_eq!(pk.params, params);
-        assert!(dk.dk >= BigUint::one());
-        assert!(dk.dk < params.q);
+        let dk_value = BigUint::from_bytes_be(&dk.dk.to_be_bytes());
+        assert!(dk_value >= BigUint::one());
+        assert!(dk_value < params.q);
 
         // Verify dk_pub
-        let expected = params.g.modpow(&dk.dk, &params.p);
+        let expected = ct_modpow_boxed(&params.g, &dk.dk, &params.p).expect("dk_pub");
         assert_eq!(dk.dk_pub, expected);
     }
 
@@ -144,7 +162,7 @@ mod tests {
         let g = &pk.params.g;
 
         // Simulate sender with random r
-        let mut rng = thread_rng();
+        let mut rng = rand::thread_rng();
         let r = rng.gen_biguint_range(&BigUint::one(), &pk.params.q);
 
         // Sender computes shared = dk_pub^r mod p

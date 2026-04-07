@@ -6,6 +6,7 @@
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
 
+use crate::ct::ct_modpow_boxed;
 use crate::errors::Result;
 use super::encrypt::{decode_message, Ciphertext};
 use super::keygen::SecretKey;
@@ -33,7 +34,7 @@ pub fn decrypt_to_element(sk: &SecretKey, ct: &Ciphertext) -> Result<BigUint> {
     let p = &sk.params.p;
 
     // s = c1^x mod p
-    let s = ct.c1.modpow(&sk.x, p);
+    let s = ct_modpow_boxed(&ct.c1, &sk.x, p)?;
 
     // s_inv = s^{p-2} mod p  (by Fermat's little theorem, since p is prime)
     let p_minus_2 = p - BigUint::from(2u32);

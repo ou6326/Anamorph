@@ -12,19 +12,24 @@
 //! - Group membership validation for all externally provided elements.
 //! - CSPRNG-backed parameter sampling via system entropy sources.
 
-use crypto_bigint::{U1024, U2048, U256, U4096, U512, U8192};
+use crypto_bigint::{U256, U512, U1024, U2048, U4096, U8192};
 use crypto_primes::{random_prime, Flavor};
 use getrandom::SysRng;
 use num_bigint::{BigUint, RandBigInt};
 use num_integer::Integer;
 use num_traits::One;
-use rand::rngs::OsRng;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::ct::ct_modpow_biguint;
 use crate::errors::{AnamorphError, Result};
 
-struct InfallibleSysRng(SysRng);
+pub(crate) struct InfallibleSysRng(SysRng);
+
+impl InfallibleSysRng {
+    pub(crate) fn new() -> Self {
+        Self(SysRng)
+    }
+}
 
 impl crypto_bigint::rand_core::TryRng for InfallibleSysRng {
     type Error = crypto_bigint::rand_core::Infallible;
@@ -130,7 +135,7 @@ pub fn generate_safe_prime(bit_size: usize) -> Result<(BigUint, BigUint)> {
     }
 
     let bit_size = u32::try_from(bit_size).map_err(|_| AnamorphError::PrimeGenerationFailed)?;
-    let mut rng = InfallibleSysRng(SysRng);
+    let mut rng = InfallibleSysRng::new();
 
     let p = match bit_size {
         0..=256 => catch_unwind(AssertUnwindSafe(|| {
@@ -195,7 +200,7 @@ pub fn generate_group_params(bit_size: usize) -> Result<GroupParams> {
 /// non-identity element has order $q$; therefore checking $g \neq 1$ suffices for
 /// $g$ to be a generator of that subgroup.
 pub fn find_generator(p: &BigUint, q: &BigUint) -> Result<BigUint> {
-    let mut rng = OsRng;
+    let mut rng = rand::thread_rng();
     let one = BigUint::one();
     let p_minus_one = p - &one;
 
