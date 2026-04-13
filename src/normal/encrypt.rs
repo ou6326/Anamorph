@@ -9,6 +9,14 @@ use num_traits::One;
 
 use super::keygen::PublicKey;
 use crate::errors::{AnamorphError, Result};
+use crate::hardening::{generate_mac, MAC_SIZE};
+use crate::padding::pad_pkcs7;
+
+pub(crate) const SECURE_PACKET_VERSION: u8 = 1;
+pub(crate) const SECURE_PACKET_DOMAIN_NORMAL: u8 = 1;
+pub(crate) const SECURE_PACKET_DOMAIN_ANAMORPHIC_PRF: u8 = 2;
+pub(crate) const SECURE_PACKET_DOMAIN_ANAMORPHIC_STREAM: u8 = 3;
+pub(crate) const SECURE_PACKET_DOMAIN_ANAMORPHIC_XOR: u8 = 4;
 
 /// ElGamal ciphertext `(c1, c2)`.
 ///
@@ -70,6 +78,38 @@ pub fn encrypt(pk: &PublicKey, msg: &[u8]) -> Result<Ciphertext> {
     encrypt_with_randomness(pk, &m, &r)
 }
 
+/// Encrypt with PKCS#7 padding and HMAC authentication.
+///
+/// Output packet format:
+/// `version || domain || block_size || c1_fixed || c2_fixed || tag`.
+pub fn encrypt_padded_authenticated(
+    pk: &PublicKey,
+    msg: &[u8],
+    mac_key: &[u8],
+    block_size: usize,
+) -> Result<Vec<u8>> {
+    let padded = pad_pkcs7(msg, block_size)?;
+    let ct = encrypt(pk, &padded)?;
+    let ct_bytes = serialize_ciphertext_for_modulus(&ct, &pk.params.p)?;
+
+    let block_size_u8 = u8::try_from(block_size).map_err(|_| {
+        AnamorphError::InvalidParameter("block size must fit in one byte".into())
+    })?;
+
+    let mut body = Vec::with_capacity(2 + ct_bytes.len());
+    body.push(SECURE_PACKET_DOMAIN_NORMAL);
+    body.push(block_size_u8);
+    body.extend_from_slice(&ct_bytes);
+
+    let tag = generate_mac(mac_key, &body)?;
+
+    let mut packet = Vec::with_capacity(1 + body.len() + MAC_SIZE);
+    packet.push(SECURE_PACKET_VERSION);
+    packet.extend_from_slice(&body);
+    packet.extend_from_slice(&tag);
+    Ok(packet)
+}
+
 /// ElGamal encryption with explicit randomness.
 ///
 /// This is the internal workhorse used by both `encrypt` (which generates
@@ -92,9 +132,27 @@ pub fn encrypt_with_randomness(pk: &PublicKey, m: &BigUint, r: &BigUint) -> Resu
     Ok(Ciphertext { c1, c2 })
 }
 
+pub(crate) fn serialize_ciphertext_for_modulus(ct: &Ciphertext, p: &BigUint) -> Result<Vec<u8>> {
+    let width = ((p.bits() + 7) / 8) as usize;
+    let c1_bytes = ct.c1.to_bytes_be();
+    let c2_bytes = ct.c2.to_bytes_be();
+
+    if c1_bytes.len() > width || c2_bytes.len() > width {
+        return Err(AnamorphError::DecryptionFailed(
+            "ciphertext component does not fit modulus width".into(),
+        ));
+    }
+
+    let mut out = vec![0u8; width * 2];
+    out[width - c1_bytes.len()..width].copy_from_slice(&c1_bytes);
+    out[2 * width - c2_bytes.len()..2 * width].copy_from_slice(&c2_bytes);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::normal::decrypt::decrypt_padded_authenticated;
     use crate::normal::keygen::keygen;
     use num_traits::Zero;
 
@@ -132,5 +190,18 @@ mod tests {
         let ct2 = encrypt(&pk, b"test").expect("encrypt2");
         // Different random r means different ciphertexts (with overwhelming probability)
         assert_ne!(ct1, ct2);
+    }
+
+    #[test]
+    fn test_secure_packet_roundtrip() {
+        let (pk, sk) = keygen(128).expect("keygen");
+        let mac_key = b"0123456789abcdef";
+
+        let packet = encrypt_padded_authenticated(&pk, b"ok", mac_key, 8)
+            .expect("secure encrypt");
+        let plain = decrypt_padded_authenticated(&sk, &packet, mac_key)
+            .expect("secure decrypt");
+
+        assert_eq!(plain, b"ok");
     }
 }

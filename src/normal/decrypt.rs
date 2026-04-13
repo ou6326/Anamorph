@@ -7,9 +7,46 @@ use num_bigint::BigUint;
 use num_traits::{One, Zero};
 
 use crate::ct::ct_modpow_boxed;
-use crate::errors::Result;
+use crate::errors::{AnamorphError, Result};
+use crate::hardening::{verify_mac, MAC_SIZE};
+use crate::padding::unpad_pkcs7;
 use super::encrypt::{decode_message, Ciphertext};
 use super::keygen::SecretKey;
+
+pub(crate) fn verify_and_extract_packet_body<'a>(
+    packet: &'a [u8],
+    mac_key: &[u8],
+    expected_domain: u8,
+) -> Result<&'a [u8]> {
+    let min_len = 2 + MAC_SIZE;
+    if packet.len() < min_len {
+        return Err(AnamorphError::DecryptionFailed(
+            "packet too short".into(),
+        ));
+    }
+
+    if packet[0] != super::encrypt::SECURE_PACKET_VERSION {
+        return Err(AnamorphError::DecryptionFailed(
+            "unsupported secure packet version".into(),
+        ));
+    }
+
+    let body_with_tag = &packet[1..];
+    let body_len = body_with_tag
+        .len()
+        .checked_sub(MAC_SIZE)
+        .ok_or_else(|| AnamorphError::DecryptionFailed("packet missing tag".into()))?;
+
+    let (body, tag_bytes) = body_with_tag.split_at(body_len);
+    if body.first().copied() != Some(expected_domain) {
+        return Err(AnamorphError::DecryptionFailed(
+            "unexpected secure packet domain".into(),
+        ));
+    }
+
+    verify_mac(mac_key, body, tag_bytes)?;
+    Ok(body)
+}
 
 /// Standard ElGamal decryption.
 ///
@@ -24,6 +61,25 @@ use super::keygen::SecretKey;
 pub fn decrypt(sk: &SecretKey, ct: &Ciphertext) -> Result<Vec<u8>> {
     let m = decrypt_to_element(sk, ct)?;
     decode_message(&m)
+}
+
+/// Decrypt a packet produced by [`super::encrypt::encrypt_padded_authenticated`].
+pub fn decrypt_padded_authenticated(
+    sk: &SecretKey,
+    packet: &[u8],
+    mac_key: &[u8],
+) -> Result<Vec<u8>> {
+    let body = verify_and_extract_packet_body(
+        packet,
+        mac_key,
+        super::encrypt::SECURE_PACKET_DOMAIN_NORMAL,
+    )?;
+    let block_size = *body.get(1).ok_or_else(|| {
+        AnamorphError::DecryptionFailed("secure packet missing block size".into())
+    })? as usize;
+    let ct = deserialize_ciphertext_for_modulus(&body[2..], &sk.params.p)?;
+    let padded = decrypt(sk, &ct)?;
+    unpad_pkcs7(&padded, block_size)
 }
 
 /// Decrypt to the raw group element (before byte-decoding).
@@ -52,10 +108,35 @@ pub fn decrypt_to_element(sk: &SecretKey, ct: &Ciphertext) -> Result<BigUint> {
     Ok(m)
 }
 
+pub(crate) fn deserialize_ciphertext_for_modulus(
+    bytes: &[u8],
+    p: &BigUint,
+) -> Result<Ciphertext> {
+    let width = ((p.bits() + 7) / 8) as usize;
+    if bytes.len() != width * 2 {
+        return Err(AnamorphError::DecryptionFailed(
+            "ciphertext payload length mismatch".into(),
+        ));
+    }
+
+    let c1 = BigUint::from_bytes_be(&bytes[..width]);
+    let c2 = BigUint::from_bytes_be(&bytes[width..]);
+    let one = BigUint::one();
+
+    if c1 <= one || c1 >= *p || c2 <= one || c2 >= *p {
+        return Err(AnamorphError::DecryptionFailed(
+            "ciphertext component out of range".into(),
+        ));
+    }
+
+    Ok(Ciphertext { c1, c2 })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::normal::encrypt::encrypt;
+    use crate::normal::encrypt::encrypt_padded_authenticated;
     use crate::normal::keygen::keygen;
 
     #[test]
@@ -98,5 +179,19 @@ mod tests {
             Ok(decrypted) => assert_ne!(decrypted, msg.to_vec()),
             Err(_) => {} // Also acceptable — decoding may fail
         }
+    }
+
+    #[test]
+    fn test_secure_packet_rejects_tampered_tag() {
+        let (pk, sk) = keygen(128).expect("keygen");
+        let mac_key = b"0123456789abcdef";
+        let mut packet = encrypt_padded_authenticated(&pk, b"ok", mac_key, 8)
+            .expect("secure encrypt");
+
+        let last = packet.len() - 1;
+        packet[last] ^= 0x01;
+
+        let result = decrypt_padded_authenticated(&sk, &packet, mac_key);
+        assert!(matches!(result, Err(AnamorphError::IntegrityError)));
     }
 }

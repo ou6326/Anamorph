@@ -18,5 +18,20 @@ pub mod encrypt;
 pub mod decrypt;
 
 pub use keygen::{akeygen, akeygen_from_params, DoubleKey};
-pub use encrypt::{aencrypt, aencrypt_stream, aencrypt_xor};
-pub use decrypt::{adecrypt, adecrypt_stream, adecrypt_xor};
+pub use encrypt::{
+    aencrypt,
+    aencrypt_padded_authenticated,
+    aencrypt_stream,
+    aencrypt_stream_padded_authenticated,
+    aencrypt_xor,
+    aencrypt_xor_padded_authenticated,
+};
+pub use decrypt::{
+    adecrypt,
+    adecrypt_padded_authenticated,
+    adecrypt_search,
+    adecrypt_stream,
+    adecrypt_stream_padded_authenticated,
+    adecrypt_xor,
+    adecrypt_xor_padded_authenticated,
+};

@@ -33,8 +33,19 @@ use zeroize::Zeroize;
 use super::keygen::DoubleKey;
 use crate::ct::ct_modpow_boxed;
 use crate::errors::{AnamorphError, Result};
-use crate::normal::encrypt::{encode_message, encrypt_with_randomness, Ciphertext};
+use crate::hardening::{generate_mac, MAC_SIZE};
+use crate::normal::encrypt::{
+    encode_message,
+    encrypt_with_randomness,
+    serialize_ciphertext_for_modulus,
+    Ciphertext,
+    SECURE_PACKET_DOMAIN_ANAMORPHIC_PRF,
+    SECURE_PACKET_DOMAIN_ANAMORPHIC_STREAM,
+    SECURE_PACKET_DOMAIN_ANAMORPHIC_XOR,
+    SECURE_PACKET_VERSION,
+};
 use crate::normal::keygen::PublicKey;
+use crate::padding::pad_pkcs7;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -64,6 +75,35 @@ pub fn aencrypt(
     let m_normal = encode_message(normal_msg, &pk.params.p)?;
     let r = derive_randomness(dk, covert_msg, &pk.params.q);
     encrypt_with_boxed_randomness(pk, &m_normal, &r)
+}
+
+/// PRF-mode anamorphic encryption with PKCS#7 padding and HMAC authentication.
+pub fn aencrypt_padded_authenticated(
+    pk: &PublicKey,
+    dk: &DoubleKey,
+    normal_msg: &[u8],
+    covert_msg: &[u8],
+    mac_key: &[u8],
+    block_size: usize,
+) -> Result<Vec<u8>> {
+    let padded = pad_pkcs7(normal_msg, block_size)?;
+    let ct = aencrypt(pk, dk, &padded, covert_msg)?;
+    let ct_body = serialize_ciphertext_for_modulus(&ct, &pk.params.p)?;
+    let block_size_u8 = u8::try_from(block_size).map_err(|_| {
+        AnamorphError::InvalidParameter("block size must fit in one byte".into())
+    })?;
+
+    let mut body = Vec::with_capacity(2 + ct_body.len());
+    body.push(SECURE_PACKET_DOMAIN_ANAMORPHIC_PRF);
+    body.push(block_size_u8);
+    body.extend_from_slice(&ct_body);
+
+    let tag = generate_mac(mac_key, &body)?;
+    let mut packet = Vec::with_capacity(1 + body.len() + MAC_SIZE);
+    packet.push(SECURE_PACKET_VERSION);
+    packet.extend_from_slice(&body);
+    packet.extend_from_slice(&tag);
+    Ok(packet)
 }
 
 /// Derive encryption randomness `r` from the double key and covert message.
@@ -203,6 +243,41 @@ pub fn aencrypt_stream(
     Ok(ciphertexts)
 }
 
+/// DH stream-mode encryption with per-ciphertext authenticated packets.
+pub fn aencrypt_stream_padded_authenticated(
+    pk: &PublicKey,
+    dk: &DoubleKey,
+    normal_msg: &[u8],
+    covert_msg: &[u8],
+    mac_key: &[u8],
+    block_size: usize,
+    max_tries_per_byte: Option<u32>,
+) -> Result<Vec<Vec<u8>>> {
+    let padded = pad_pkcs7(normal_msg, block_size)?;
+    let cts = aencrypt_stream(pk, dk, &padded, covert_msg, max_tries_per_byte)?;
+    let block_size_u8 = u8::try_from(block_size).map_err(|_| {
+        AnamorphError::InvalidParameter("block size must fit in one byte".into())
+    })?;
+
+    let mut packets = Vec::with_capacity(cts.len());
+    for ct in cts {
+        let ct_body = serialize_ciphertext_for_modulus(&ct, &pk.params.p)?;
+        let mut body = Vec::with_capacity(2 + ct_body.len());
+        body.push(SECURE_PACKET_DOMAIN_ANAMORPHIC_STREAM);
+        body.push(block_size_u8);
+        body.extend_from_slice(&ct_body);
+
+        let tag = generate_mac(mac_key, &body)?;
+        let mut packet = Vec::with_capacity(1 + body.len() + MAC_SIZE);
+        packet.push(SECURE_PACKET_VERSION);
+        packet.extend_from_slice(&body);
+        packet.extend_from_slice(&tag);
+        packets.push(packet);
+    }
+
+    Ok(packets)
+}
+
 /// Anamorphic encryption using DH-XOR method (single ciphertext, fast).
 ///
 /// Instead of rejection sampling, this method embeds the covert message
@@ -244,6 +319,40 @@ pub fn aencrypt_xor(
         .collect();
 
     Ok((ct, covert_encrypted))
+}
+
+/// DH XOR-mode encryption with authenticated packet wrapping.
+pub fn aencrypt_xor_padded_authenticated(
+    pk: &PublicKey,
+    dk: &DoubleKey,
+    normal_msg: &[u8],
+    covert_msg: &[u8],
+    mac_key: &[u8],
+    block_size: usize,
+) -> Result<Vec<u8>> {
+    let padded = pad_pkcs7(normal_msg, block_size)?;
+    let (ct, covert_encrypted) = aencrypt_xor(pk, dk, &padded, covert_msg)?;
+    let ct_body = serialize_ciphertext_for_modulus(&ct, &pk.params.p)?;
+    let block_size_u8 = u8::try_from(block_size).map_err(|_| {
+        AnamorphError::InvalidParameter("block size must fit in one byte".into())
+    })?;
+    let covert_len = u32::try_from(covert_encrypted.len()).map_err(|_| {
+        AnamorphError::InvalidParameter("covert payload too large".into())
+    })?;
+
+    let mut body = Vec::with_capacity(2 + ct_body.len() + 4 + covert_encrypted.len());
+    body.push(SECURE_PACKET_DOMAIN_ANAMORPHIC_XOR);
+    body.push(block_size_u8);
+    body.extend_from_slice(&ct_body);
+    body.extend_from_slice(&covert_len.to_be_bytes());
+    body.extend_from_slice(&covert_encrypted);
+
+    let tag = generate_mac(mac_key, &body)?;
+    let mut packet = Vec::with_capacity(1 + body.len() + MAC_SIZE);
+    packet.push(SECURE_PACKET_VERSION);
+    packet.extend_from_slice(&body);
+    packet.extend_from_slice(&tag);
+    Ok(packet)
 }
 
 // =========================================================================

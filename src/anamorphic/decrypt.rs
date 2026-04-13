@@ -13,10 +13,15 @@
 
 use num_bigint::BigUint;
 
-use crate::errors::Result;
-use crate::normal::decrypt::decrypt;
+use crate::errors::{AnamorphError, Result};
+use crate::normal::decrypt::{
+    decrypt,
+    deserialize_ciphertext_for_modulus,
+    verify_and_extract_packet_body,
+};
 use crate::normal::encrypt::Ciphertext;
 use crate::normal::keygen::SecretKey;
+use crate::padding::unpad_pkcs7;
 use super::encrypt::{derive_keystream, derive_randomness, shared_to_byte};
 use super::keygen::DoubleKey;
 
@@ -63,6 +68,28 @@ pub fn adecrypt(
         normal_msg,
         covert_msg,
     })
+}
+
+/// PRF-mode decryption for authenticated padded packets.
+pub fn adecrypt_padded_authenticated(
+    sk: &SecretKey,
+    dk: &DoubleKey,
+    packet: &[u8],
+    mac_key: &[u8],
+    candidate_covert: &[u8],
+) -> Result<AnamorphicPlaintext> {
+    let body = verify_and_extract_packet_body(
+        packet,
+        mac_key,
+        crate::normal::encrypt::SECURE_PACKET_DOMAIN_ANAMORPHIC_PRF,
+    )?;
+    let block_size = *body.get(1).ok_or_else(|| {
+        AnamorphError::DecryptionFailed("secure packet missing block size".into())
+    })? as usize;
+    let ct = deserialize_ciphertext_for_modulus(&body[2..], &sk.params.p)?;
+    let mut plaintext = adecrypt(sk, dk, &ct, candidate_covert)?;
+    plaintext.normal_msg = unpad_pkcs7(&plaintext.normal_msg, block_size)?;
+    Ok(plaintext)
 }
 
 /// Anamorphic decryption with brute-force search over a candidate set (PRF mode).
@@ -148,6 +175,54 @@ pub fn adecrypt_stream(
     })
 }
 
+/// DH stream-mode decryption for authenticated padded packets.
+pub fn adecrypt_stream_padded_authenticated(
+    sk: &SecretKey,
+    dk: &DoubleKey,
+    packets: &[Vec<u8>],
+    mac_key: &[u8],
+) -> Result<AnamorphicPlaintext> {
+    if packets.is_empty() {
+        return Ok(AnamorphicPlaintext {
+            normal_msg: Vec::new(),
+            covert_msg: Some(Vec::new()),
+        });
+    }
+
+    let mut block_size = None;
+    let mut cts = Vec::with_capacity(packets.len());
+
+    for packet in packets {
+        let body = verify_and_extract_packet_body(
+            packet,
+            mac_key,
+            crate::normal::encrypt::SECURE_PACKET_DOMAIN_ANAMORPHIC_STREAM,
+        )?;
+        let current_block_size = *body.get(1).ok_or_else(|| {
+            AnamorphError::DecryptionFailed("secure packet missing block size".into())
+        })? as usize;
+
+        match block_size {
+            Some(expected) if expected != current_block_size => {
+                return Err(AnamorphError::DecryptionFailed(
+                    "stream packet block sizes do not match".into(),
+                ));
+            }
+            None => block_size = Some(current_block_size),
+            _ => {}
+        }
+
+        let ct = deserialize_ciphertext_for_modulus(&body[2..], &sk.params.p)?;
+        cts.push(ct);
+    }
+
+    let mut plaintext = adecrypt_stream(sk, dk, &cts)?;
+    if let Some(bs) = block_size {
+        plaintext.normal_msg = unpad_pkcs7(&plaintext.normal_msg, bs)?;
+    }
+    Ok(plaintext)
+}
+
 // =========================================================================
 // 3. DH-XOR decryption (fast, single ciphertext + sideband)
 // =========================================================================
@@ -190,6 +265,46 @@ pub fn adecrypt_xor(
     })
 }
 
+/// DH XOR-mode decryption for authenticated padded packets.
+pub fn adecrypt_xor_padded_authenticated(
+    sk: &SecretKey,
+    dk: &DoubleKey,
+    packet: &[u8],
+    mac_key: &[u8],
+) -> Result<AnamorphicPlaintext> {
+    let body = verify_and_extract_packet_body(
+        packet,
+        mac_key,
+        crate::normal::encrypt::SECURE_PACKET_DOMAIN_ANAMORPHIC_XOR,
+    )?;
+
+    let block_size = *body.get(1).ok_or_else(|| {
+        AnamorphError::DecryptionFailed("secure packet missing block size".into())
+    })? as usize;
+    let width = ((sk.params.p.bits() + 7) / 8) as usize;
+    let header_len = 2 + (2 * width) + 4;
+    if body.len() < header_len {
+        return Err(AnamorphError::DecryptionFailed(
+            "secure xor packet too short".into(),
+        ));
+    }
+
+    let ct = deserialize_ciphertext_for_modulus(&body[2..2 + (2 * width)], &sk.params.p)?;
+    let mut len_arr = [0u8; 4];
+    len_arr.copy_from_slice(&body[2 + (2 * width)..header_len]);
+    let covert_len = u32::from_be_bytes(len_arr) as usize;
+    let covert_encrypted = &body[header_len..];
+    if covert_encrypted.len() != covert_len {
+        return Err(AnamorphError::DecryptionFailed(
+            "secure xor packet covert length mismatch".into(),
+        ));
+    }
+
+    let mut plaintext = adecrypt_xor(sk, dk, &ct, covert_encrypted)?;
+    plaintext.normal_msg = unpad_pkcs7(&plaintext.normal_msg, block_size)?;
+    Ok(plaintext)
+}
+
 // =========================================================================
 // Presence check
 // =========================================================================
@@ -219,7 +334,14 @@ pub fn verify_covert_presence(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::anamorphic::encrypt::{aencrypt, aencrypt_stream, aencrypt_xor};
+    use crate::anamorphic::encrypt::{
+        aencrypt,
+        aencrypt_padded_authenticated,
+        aencrypt_stream,
+        aencrypt_stream_padded_authenticated,
+        aencrypt_xor,
+        aencrypt_xor_padded_authenticated,
+    };
     use crate::anamorphic::keygen::akeygen;
 
     // ----- PRF mode tests -----
@@ -343,5 +465,67 @@ mod tests {
             &dk, &ct, b"wrong",
             &pk.params.p, &pk.params.q, &pk.params.g
         ));
+    }
+
+    #[test]
+    fn test_secure_prf_packet_roundtrip() {
+        let (pk, sk, dk) = akeygen(128).expect("akeygen");
+        let mac_key = b"0123456789abcdef";
+        let packet = aencrypt_padded_authenticated(
+            &pk,
+            &dk,
+            b"ok",
+            b"hid",
+            mac_key,
+            8,
+        )
+        .expect("secure aencrypt");
+
+        let result = adecrypt_padded_authenticated(&sk, &dk, &packet, mac_key, b"hid")
+            .expect("secure adecrypt");
+        assert_eq!(result.normal_msg, b"ok".to_vec());
+        assert_eq!(result.covert_msg, Some(b"hid".to_vec()));
+    }
+
+    #[test]
+    fn test_secure_stream_packet_roundtrip() {
+        let (pk, sk, dk) = akeygen(128).expect("akeygen");
+        let mac_key = b"0123456789abcdef";
+        let covert = vec![0x42];
+        let packets = aencrypt_stream_padded_authenticated(
+            &pk,
+            &dk,
+            b"ok",
+            &covert,
+            mac_key,
+            8,
+            Some(131072),
+        )
+        .expect("secure stream encrypt");
+
+        let result = adecrypt_stream_padded_authenticated(&sk, &dk, &packets, mac_key)
+            .expect("secure stream decrypt");
+        assert_eq!(result.normal_msg, b"ok".to_vec());
+        assert_eq!(result.covert_msg, Some(covert));
+    }
+
+    #[test]
+    fn test_secure_xor_packet_roundtrip() {
+        let (pk, sk, dk) = akeygen(128).expect("akeygen");
+        let mac_key = b"0123456789abcdef";
+        let packet = aencrypt_xor_padded_authenticated(
+            &pk,
+            &dk,
+            b"ok",
+            b"covert payload",
+            mac_key,
+            8,
+        )
+        .expect("secure xor encrypt");
+
+        let result = adecrypt_xor_padded_authenticated(&sk, &dk, &packet, mac_key)
+            .expect("secure xor decrypt");
+        assert_eq!(result.normal_msg, b"ok".to_vec());
+        assert_eq!(result.covert_msg, Some(b"covert payload".to_vec()));
     }
 }
