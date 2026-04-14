@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use criterion::{measurement::WallTime, BenchmarkGroup, SamplingMode};
 use num_bigint::BigUint;
 use sha2::{Digest, Sha256};
