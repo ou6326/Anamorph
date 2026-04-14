@@ -168,12 +168,12 @@ def fig_overhead_comparison(baselines: dict, out_dir: Path):
     colors = []
 
     keys_map = [
-        ("baseline/normal_encrypt_end_to_end",              "Normal Enc",       PALETTE["normal"]),
-        ("baseline/normal_decrypt_end_to_end",              "Normal Dec",       PALETTE["normal"]),
-        ("baseline/anamorphic_prf_encrypt_empty_payload",   "PRF Enc (ε=0)",    PALETTE["prf_enc"]),
-        ("baseline/anamorphic_prf_decrypt_empty_payload",   "PRF Dec (ε=0)",    PALETTE["prf_dec"]),
-        ("baseline/anamorphic_xor_encrypt_empty_payload",   "XOR Enc (ε=0)",    PALETTE["xor_enc"]),
-        ("baseline/anamorphic_xor_decrypt_empty_payload",   "XOR Dec (ε=0)",    PALETTE["xor_dec"]),
+        ("baseline_normal_encrypt_end_to_end",              "Normal Enc",       PALETTE["normal"]),
+        ("baseline_normal_decrypt_end_to_end",              "Normal Dec",       PALETTE["normal"]),
+        ("baseline_anamorphic_prf_encrypt_empty_payload",   "PRF Enc (ε=0)",    PALETTE["prf_enc"]),
+        ("baseline_anamorphic_prf_decrypt_empty_payload",   "PRF Dec (ε=0)",    PALETTE["prf_dec"]),
+        ("baseline_anamorphic_xor_encrypt_empty_payload",   "XOR Enc (ε=0)",    PALETTE["xor_enc"]),
+        ("baseline_anamorphic_xor_decrypt_empty_payload",   "XOR Dec (ε=0)",    PALETTE["xor_dec"]),
     ]
 
     for key, label, color in keys_map:
@@ -383,8 +383,8 @@ def fig_xor_step_breakdown(criterion_dir: Path, out_dir: Path):
 def fig_ec24_primitives(baselines: dict, out_dir: Path):
     """Bar chart: EC24 primitive costs (ratchet step + indicator check)."""
     items = [
-        ("ec24/ratchet_once",             "Ratchet (1 step)",    PALETTE["ratchet"]),
-        ("ec24/verify_covert_indicator",  "Presence Indicator",  PALETTE["indicator"]),
+        ("ec24_ratchet_once",             "Ratchet (1 step)",    PALETTE["ratchet"]),
+        ("ec24_verify_covert_indicator",  "Presence Indicator",  PALETTE["indicator"]),
     ]
 
     labels, values, errors, colors = [], [], [], []
@@ -421,28 +421,27 @@ def fig_ec24_primitives(baselines: dict, out_dir: Path):
 
 def fig_keygen_comparison(criterion_dir: Path, out_dir: Path):
     """Bar chart: Gen vs aGen from-params cost."""
-    data = collect_group_data(criterion_dir, "operation_keygen_from_params_total_cost")
-    if not data:
-        # try flat layout
-        group_dir = criterion_dir / "operation_keygen_from_params_total_cost"
-        if not group_dir.exists():
-            return
-        entries = []
-        for sub in sorted(group_dir.iterdir()):
-            if sub.is_dir() and sub.name != "report":
-                est = parse_estimates(sub)
-                if est:
-                    est["name"] = sub.name
-                    entries.append(est)
-        if not entries:
-            return
+    group_dir = criterion_dir / "operation_keygen_from_params_total_cost"
+    if not group_dir.exists():
+        return
 
-        labels = [e["name"].replace("_", " ") for e in entries]
-        values = [ns_to_us(e["mean_ns"]) for e in entries]
-        errors = [ns_to_us(e["stddev_ns"]) for e in entries]
-        colors = [PALETTE["keygen"] if "Gen" in e["name"] else PALETTE["akeygen"] for e in entries]
-    else:
-        return  # parameterised groups handled differently
+    entries = []
+    for sub in sorted(group_dir.iterdir()):
+        if sub.is_dir() and sub.name != "report":
+            est = parse_estimates(sub)
+            if est:
+                est["name"] = sub.name
+                entries.append(est)
+    if not entries:
+        return
+
+    label_map = {"Gen_from_params": "Gen(λ)", "aGen_from_params": "aGen(λ)"}
+    color_map = {"Gen_from_params": PALETTE["keygen"], "aGen_from_params": PALETTE["akeygen"]}
+
+    labels = [label_map.get(e["name"], e["name"]) for e in entries]
+    values = [ns_to_us(e["mean_ns"]) for e in entries]
+    errors = [ns_to_us(e["stddev_ns"]) for e in entries]
+    colors = [color_map.get(e["name"], PALETTE["keygen"]) for e in entries]
 
     fig, ax = plt.subplots(figsize=(7, 4))
     x = np.arange(len(labels))
@@ -451,12 +450,12 @@ def fig_keygen_comparison(criterion_dir: Path, out_dir: Path):
 
     for bar, val in zip(bars, values):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(values) * 0.03,
-                f"{val:.1f}", ha="center", va="bottom", fontsize=10, color=FG_TEXT)
+                f"{val:.1f} µs", ha="center", va="bottom", fontsize=10, color=FG_TEXT)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=10)
+    ax.set_xticklabels(labels, fontsize=11)
     ax.set_ylabel("Time (µs)")
-    ax.set_title("Key Generation Cost: Normal vs Anamorphic (from params)")
+    ax.set_title("Key Generation Cost: Normal Gen vs Anamorphic aGen")
     ax.grid(axis="y", linestyle="--")
     add_watermark(ax)
     fig.tight_layout()
@@ -466,9 +465,9 @@ def fig_keygen_comparison(criterion_dir: Path, out_dir: Path):
 def fig_robustness_controls(baselines: dict, out_dir: Path):
     """Bar chart: robustness / negative-path timing."""
     items = [
-        ("robustness/prf_adecrypt_on_normal_ciphertext",    "PRF aDec\non normal ct",     PALETTE["control"]),
-        ("robustness/prf_adecrypt_wrong_candidate",         "PRF aDec\nwrong candidate",   PALETTE["search"]),
-        ("robustness/ec24_indicator_on_normal_ciphertext",  "EC24 Indicator\non normal ct", PALETTE["indicator"]),
+        ("robustness_prf_adecrypt_on_normal_ciphertext",    "PRF aDec\non normal ct",     PALETTE["control"]),
+        ("robustness_prf_adecrypt_wrong_candidate",         "PRF aDec\nwrong candidate",   PALETTE["search"]),
+        ("robustness_ec24_indicator_on_normal_ciphertext",  "EC24 Indicator\non normal ct", PALETTE["indicator"]),
     ]
 
     labels, values, errors, colors = [], [], [], []
