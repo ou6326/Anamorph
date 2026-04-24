@@ -7,7 +7,6 @@ use anamorph::anamorphic::{
     adecrypt, adecrypt_xor, aencrypt, aencrypt_xor, akeygen,
 };
 use anamorph::ec24::{verify_covert_indicator, MultiUseDoubleKey};
-use anamorph::errors::AnamorphError;
 use anamorph::normal::{decrypt, encrypt};
 
 const TEST_MAC_KEY: &[u8] = b"0123456789abcdef";
@@ -262,10 +261,11 @@ fn test_presence_indicator_normal_ct() {
         b"anything",
         &pk.params.p, &pk.params.q, &pk.params.g,
     )
-    .is_err());
+    .expect("indicator on normal packet should return false")
+        == false);
 }
 
-/// Secure packet domain separation: normal decryptor must reject anamorphic packets.
+/// Secure packet visible decryption should work across normal and anamorphic packets.
 #[test]
 fn test_ec24_indistinguishability() {
     let (pk, sk, dk) = akeygen(128).expect("akeygen");
@@ -285,9 +285,9 @@ fn test_ec24_indistinguishability() {
         .expect("ec24 encrypt");
 
     let n_dec = decrypt(&sk, &normal_packet, TEST_MAC_KEY).expect("normal decrypt");
-    let a_dec = decrypt(&sk, &ec24_packet, TEST_MAC_KEY);
+    let a_dec = decrypt(&sk, &ec24_packet, TEST_MAC_KEY).expect("anamorphic visible decrypt");
 
-    assert!(matches!(a_dec, Err(AnamorphError::DecryptionFailed(_))));
+    assert_eq!(a_dec, b"msg".to_vec());
     assert_eq!(n_dec, b"msg".to_vec());
 }
 
@@ -317,8 +317,8 @@ fn test_type1_coercion_ec24_ratcheted() {
         .expect("encrypt");
 
     // Adversary with sk only
-    let adversary = decrypt(&sk, &packet, TEST_MAC_KEY);
-    assert!(matches!(adversary, Err(AnamorphError::DecryptionFailed(_))));
+    let adversary = decrypt(&sk, &packet, TEST_MAC_KEY).expect("visible decrypt");
+    assert_eq!(adversary, b"safe".to_vec());
 
     // Receiver with same ratchet state
     let receiver = adecrypt(

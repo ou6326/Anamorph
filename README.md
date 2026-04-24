@@ -35,7 +35,7 @@ The scheme provides a **covert communication channel** hidden inside syntactical
 
 - Full **Normal Mode** and **Anamorphic Mode** (EC22 base scheme + EC24 extension)
 - **Multi-use double keys** — resolving the one-shot limitation of EC22
-- **Covert-message presence indicator** — receivers can now detect whether a ciphertext carries a covert payload
+- **Covert-message presence indicator** — PRF-mode packets can be checked for a candidate covert payload, while normal packets cleanly report no covert payload
 - **HMAC-SHA256 MAC helpers** — hardened generation and verification primitives
 - **Constant-time helper module** for secret-dependent operations
 - **Block-padding** support for length-oracle mitigation
@@ -265,6 +265,9 @@ assert_eq!(normal, b"Normal message");
 let decoded = adecrypt(&sk, &dk, &packet, mac_key, b"Covert payload")?;
 assert_eq!(decoded.covert_msg, Some(b"Covert payload".to_vec()));
 ```
+
+Secure packet decryption reveals the visible message across normal and
+anamorphic packet domains; covert extraction remains gated on the double key.
 
 Legacy `encrypt`/`decrypt` and `aencrypt`/`adecrypt` are still available for
 baseline testing and side-by-side comparisons in the integration tests.

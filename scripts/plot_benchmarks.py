@@ -9,10 +9,8 @@ Produces PNG figures in resources/figures/.
 """
 
 import json
-import os
 import sys
 from pathlib import Path
-from collections import defaultdict
 
 import matplotlib
 matplotlib.use("Agg")
@@ -23,9 +21,10 @@ import numpy as np
 # ── Style ────────────────────────────────────────────────────────────────
 
 PALETTE = {
-    "normal":      "#3B82F6",   # blue
-    "prf_enc":     "#8B5CF6",   # violet
-    "prf_dec":     "#A855F7",   # purple
+    "normal":      "#2563EB",   # strong blue
+    "normal_dec":  "#60A5FA",   # light blue
+    "prf_enc":     "#7C3AED",   # violet
+    "prf_dec":     "#C026D3",   # magenta
     "xor_enc":     "#EF4444",   # red
     "xor_dec":     "#F97316",   # orange
     "ec24_prf":    "#10B981",   # emerald
@@ -157,7 +156,7 @@ def add_watermark(ax):
             fontsize=8, color=GRID_CLR, ha="right", va="bottom",
             fontstyle="italic", alpha=0.6)
     
-def merge_series(*series_lists: list[list[dict]]) -> list[dict]:
+def merge_series(*series_lists: list[dict]) -> list[dict]:
     """Merge multiple parameter series and sort by parameter value."""
     merged = []
     for series in series_lists:
@@ -176,7 +175,7 @@ def fig_overhead_comparison(baselines: dict, out_dir: Path):
 
     keys_map = [
         ("baseline_normal_encrypt_end_to_end",              "Normal Enc",       PALETTE["normal"]),
-        ("baseline_normal_decrypt_end_to_end",              "Normal Dec",       PALETTE["normal"]),
+        ("baseline_normal_decrypt_end_to_end",              "Normal Dec",       PALETTE["normal_dec"]),
         ("baseline_anamorphic_prf_encrypt_empty_payload",   "PRF Enc (ε=0)",    PALETTE["prf_enc"]),
         ("baseline_anamorphic_prf_decrypt_empty_payload",   "PRF Dec (ε=0)",    PALETTE["prf_dec"]),
         ("baseline_anamorphic_xor_encrypt_empty_payload",   "XOR Enc (ε=0)",    PALETTE["xor_enc"]),
@@ -216,10 +215,10 @@ def fig_overhead_comparison(baselines: dict, out_dir: Path):
 def fig_payload_scaling(criterion_dir: Path, out_dir: Path):
     """Line chart: Encrypt/decrypt cost vs covert payload size for PRF and XOR modes."""
     groups = [
-        ("anamorphic_prf_total_cost",         "PRF Enc",  PALETTE["prf_enc"],  "-",  "o"),
-        ("anamorphic_prf_decrypt_total_cost",  "PRF Dec",  PALETTE["prf_dec"],  "--", "s"),
-        ("anamorphic_xor_encrypt_total_cost",  "XOR Enc",  PALETTE["xor_enc"],  "-",  "^"),
-        ("anamorphic_xor_decrypt_total_cost",  "XOR Dec",  PALETTE["xor_dec"],  "--", "D"),
+        ("anamorphic_prf_total_cost",         "PRF Enc",  PALETTE["prf_enc"], "-",  "o"),
+        ("anamorphic_prf_decrypt_total_cost", "PRF Dec",  PALETTE["prf_dec"], "--", "s"),
+        ("anamorphic_xor_encrypt_total_cost", "XOR Enc",  PALETTE["xor_enc"], "-",  "^"),
+        ("anamorphic_xor_decrypt_total_cost", "XOR Dec",  PALETTE["xor_dec"], "--", "D"),
     ]
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -296,10 +295,10 @@ def fig_payload_scaling_large(criterion_dir: Path, out_dir: Path):
 def fig_ec24_vs_ec22(criterion_dir: Path, out_dir: Path):
     """Compare EC22 (plain) vs EC24 (ratcheted) encryption overhead."""
     groups = [
-        ("anamorphic_prf_total_cost",     "EC22 PRF Enc",     PALETTE["prf_enc"],  "-",  "o"),
-        ("ec24_prf_encrypt_total_cost",   "EC24 PRF Enc",     PALETTE["ec24_prf"], "-",  "P"),
-        ("anamorphic_xor_encrypt_total_cost", "EC22 XOR Enc", PALETTE["xor_enc"],  "--", "^"),
-        ("ec24_xor_encrypt_total_cost",   "EC24 XOR Enc",     PALETTE["ec24_xor"], "--", "X"),
+        ("anamorphic_prf_total_cost",        "EC22 PRF Enc", PALETTE["prf_enc"], "-",  "o"),
+        ("ec24_prf_encrypt_total_cost",      "EC24 PRF Enc", PALETTE["ec24_prf"], "-",  "P"),
+        ("anamorphic_xor_encrypt_total_cost","EC22 XOR Enc", PALETTE["xor_enc"], "--", "^"),
+        ("ec24_xor_encrypt_total_cost",      "EC24 XOR Enc", PALETTE["ec24_xor"], "--", "X"),
     ]
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -344,7 +343,6 @@ def fig_xor_step_breakdown(criterion_dir: Path, out_dir: Path):
     any_data = False
 
     for step_name, label, color in steps:
-        data = collect_group_data(criterion_dir, "xor_step_scaling")
         step_data = []
         for entry in sorted((criterion_dir / "xor_step_scaling").iterdir()) if (criterion_dir / "xor_step_scaling").exists() else []:
             if not entry.is_dir() or entry.name == "report":
@@ -442,8 +440,25 @@ def fig_keygen_comparison(criterion_dir: Path, out_dir: Path):
     if not entries:
         return
 
-    label_map = {"Gen_from_params": "Gen(λ)", "aGen_from_params": "aGen(λ)"}
-    color_map = {"Gen_from_params": PALETTE["keygen"], "aGen_from_params": PALETTE["akeygen"]}
+    label_map = {
+        "Gen_from_params": "Gen(λ)",
+        "aGen_from_params": "aGen(λ)",
+        "gen_from_params": "Gen(λ)",
+        "agen_from_params": "aGen(λ)",
+    }
+    color_map = {
+        "Gen_from_params": PALETTE["keygen"],
+        "aGen_from_params": PALETTE["akeygen"],
+        "gen_from_params": PALETTE["keygen"],
+        "agen_from_params": PALETTE["akeygen"],
+    }
+    order_map = {
+        "Gen_from_params": 0,
+        "gen_from_params": 0,
+        "aGen_from_params": 1,
+        "agen_from_params": 1,
+    }
+    entries.sort(key=lambda e: order_map.get(e["name"], 999))
 
     labels = [label_map.get(e["name"], e["name"]) for e in entries]
     values = [ns_to_us(e["mean_ns"]) for e in entries]
@@ -472,8 +487,8 @@ def fig_keygen_comparison(criterion_dir: Path, out_dir: Path):
 def fig_robustness_controls(baselines: dict, out_dir: Path):
     """Bar chart: robustness / negative-path timing."""
     items = [
-        ("robustness_prf_adecrypt_on_normal_ciphertext",    "PRF aDec\non normal ct",     PALETTE["control"]),
-        ("robustness_prf_adecrypt_wrong_candidate",         "PRF aDec\nwrong candidate",   PALETTE["search"]),
+        ("robustness_prf_adecrypt_on_normal_ciphertext",    "PRF aDec\non normal ct",       PALETTE["control"]),
+        ("robustness_prf_adecrypt_wrong_candidate",         "PRF aDec\nwrong candidate",    PALETTE["search"]),
         ("robustness_ec24_indicator_on_normal_ciphertext",  "EC24 Indicator\non normal ct", PALETTE["indicator"]),
     ]
 

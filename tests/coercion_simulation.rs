@@ -290,8 +290,9 @@ fn test_type1_prf_mode_secure_packet() {
     )
     .expect("secure aencrypt");
 
-    let adversary_view = decrypt(&sk, &packet, TEST_MAC_KEY);
-    assert!(adversary_view.is_err(), "normal decryptor must reject anamorphic packet domain");
+    let adversary_view = decrypt(&sk, &packet, TEST_MAC_KEY)
+        .expect("visible decrypt");
+    assert_eq!(adversary_view, normal_msg.to_vec());
 
     let receiver_view = adecrypt(&sk, &dk, &packet, TEST_MAC_KEY, covert_msg)
         .expect("secure adecrypt");

@@ -1,7 +1,7 @@
 //! Behavioral comparison tests between legacy and secure packet APIs.
 //!
 //! These tests keep old interfaces available for baseline comparison while
-//! validating the migrated secure defaults (padding + MAC + domain separation).
+//! validating the migrated secure defaults (padding + MAC + packet domains).
 
 use anamorph::anamorphic::{
     adecrypt_legacy,
@@ -120,7 +120,7 @@ fn test_stream_and_xor_legacy_vs_secure_behavior() {
 }
 
 #[test]
-fn test_secure_packet_domain_separation_vs_legacy_ciphertext() {
+fn test_secure_packet_visible_view_matches_legacy_ciphertext() {
     let (pk, sk, dk) = akeygen(128).expect("akeygen");
 
     let legacy_ct = aencrypt_legacy(&pk, &dk, b"cmp", b"cov").expect("legacy aencrypt");
@@ -134,9 +134,9 @@ fn test_secure_packet_domain_separation_vs_legacy_ciphertext() {
     )
     .expect("secure aencrypt");
 
-    // Secure normal decryptor enforces domain separation and rejects anamorphic packets.
-    let normal_view = decrypt(&sk, &secure_anamorphic_packet, TEST_MAC_KEY);
-    assert!(normal_view.is_err());
+    let normal_view = decrypt(&sk, &secure_anamorphic_packet, TEST_MAC_KEY)
+        .expect("visible secure decrypt");
+    assert_eq!(normal_view, b"cmp".to_vec());
 }
 
 #[test]

@@ -13,10 +13,9 @@ use crate::padding::unpad_pkcs7;
 use super::encrypt::{decode_message, Ciphertext};
 use super::keygen::SecretKey;
 
-pub(crate) fn verify_and_extract_packet_body<'a>(
+pub(crate) fn verify_and_extract_any_packet_body<'a>(
     packet: &'a [u8],
     mac_key: &[u8],
-    expected_domain: u8,
 ) -> Result<&'a [u8]> {
     let min_len = 1 + 2 + MAC_SIZE; // version, domain, block_size, mac
     if packet.len() < min_len {
@@ -38,6 +37,15 @@ pub(crate) fn verify_and_extract_packet_body<'a>(
     }
 
     let body = &msg[1..];
+    Ok(body)
+}
+
+pub(crate) fn verify_and_extract_packet_body<'a>(
+    packet: &'a [u8],
+    mac_key: &[u8],
+    expected_domain: u8,
+) -> Result<&'a [u8]> {
+    let body = verify_and_extract_any_packet_body(packet, mac_key)?;
     if body[0] != expected_domain {
         return Err(AnamorphError::DecryptionFailed(
             "unexpected secure packet domain".into(),
@@ -67,15 +75,35 @@ pub fn decrypt(
     packet: &[u8],
     mac_key: &[u8],
 ) -> Result<Vec<u8>> {
-    let body = verify_and_extract_packet_body(
-        packet,
-        mac_key,
-        super::encrypt::SECURE_PACKET_DOMAIN_NORMAL,
-    )?;
+    let body = verify_and_extract_any_packet_body(packet, mac_key)?;
+    let domain = *body.get(0).ok_or_else(|| {
+        AnamorphError::DecryptionFailed("secure packet missing domain".into())
+    })?;
     let block_size = *body.get(1).ok_or_else(|| {
         AnamorphError::DecryptionFailed("secure packet missing block size".into())
     })? as usize;
-    let ct = deserialize_ciphertext_for_modulus(&body[2..], &sk.params.p)?;
+    let width = ((sk.params.p.bits() + 7) / 8) as usize;
+    let ct_bytes = match domain {
+        super::encrypt::SECURE_PACKET_DOMAIN_NORMAL
+        | super::encrypt::SECURE_PACKET_DOMAIN_ANAMORPHIC_PRF
+        | super::encrypt::SECURE_PACKET_DOMAIN_ANAMORPHIC_STREAM => &body[2..],
+        super::encrypt::SECURE_PACKET_DOMAIN_ANAMORPHIC_XOR => {
+            let header_len = 2 + (2 * width) + 4;
+            if body.len() < header_len {
+                return Err(AnamorphError::DecryptionFailed(
+                    "secure xor packet too short".into(),
+                ));
+            }
+            &body[2..2 + (2 * width)]
+        }
+        _ => {
+            return Err(AnamorphError::DecryptionFailed(
+                "unexpected secure packet domain".into(),
+            ))
+        }
+    };
+
+    let ct = deserialize_ciphertext_for_modulus(ct_bytes, &sk.params.p)?;
     let padded = decrypt_legacy(sk, &ct)?;
     unpad_pkcs7(&padded, block_size)
 }
@@ -191,5 +219,41 @@ mod tests {
 
         let result = decrypt(&sk, &packet, mac_key);
         assert!(matches!(result, Err(AnamorphError::IntegrityError)));
+    }
+
+    #[test]
+    fn test_secure_prf_packet_visible_decrypt() {
+        let (pk, sk, dk) = crate::anamorphic::keygen::akeygen(128).expect("akeygen");
+        let mac_key = b"0123456789abcdef";
+        let packet = crate::anamorphic::encrypt::aencrypt(
+            &pk,
+            &dk,
+            b"visible",
+            b"covert",
+            mac_key,
+            8,
+        )
+        .expect("secure aencrypt");
+
+        let plain = decrypt(&sk, &packet, mac_key).expect("visible decrypt");
+        assert_eq!(plain, b"visible");
+    }
+
+    #[test]
+    fn test_secure_xor_packet_visible_decrypt() {
+        let (pk, sk, dk) = crate::anamorphic::keygen::akeygen(128).expect("akeygen");
+        let mac_key = b"0123456789abcdef";
+        let packet = crate::anamorphic::encrypt::aencrypt_xor(
+            &pk,
+            &dk,
+            b"visible",
+            b"covert",
+            mac_key,
+            8,
+        )
+        .expect("secure xor encrypt");
+
+        let plain = decrypt(&sk, &packet, mac_key).expect("visible decrypt");
+        assert_eq!(plain, b"visible");
     }
 }
