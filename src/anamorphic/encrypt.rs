@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use super::keygen::DoubleKey;
-use crate::ct::{ct_modpow_boxed, ct_scalar_from_bytes_mod_q};
+use crate::ct::{ct_modpow_biguint_to_boxed, ct_modpow_boxed, ct_scalar_from_bytes_mod_q};
 use crate::errors::{AnamorphError, Result};
 use crate::hardening::{generate_mac, MAC_SIZE};
 use crate::normal::encrypt::{
@@ -205,10 +205,11 @@ pub fn aencrypt_stream_legacy(
             let c1 = crate::ct::ct_modpow_biguint(&pk.params.g, &r, &pk.params.p)?;
 
             // Compute shared secret = dk_pub^r mod p
-            let shared = crate::ct::ct_modpow_biguint(&dk.dk_pub, &r, &pk.params.p)?;
+            let mut shared = ct_modpow_biguint_to_boxed(&dk.dk_pub, &r, &pk.params.p)?;
 
             // Derive mask byte from the shared secret
             let mask = shared_to_byte(&shared, &pk.params.p);
+            shared.zeroize();
 
             if mask == covert_byte {
                 // This r encodes our covert byte — encrypt with it
@@ -293,10 +294,11 @@ pub fn aencrypt_xor_legacy(
     let ct = encrypt_with_randomness(pk, &m_normal, &r)?;
 
     // Compute shared secret: dk_pub^r = g^(dk·r) mod p
-    let shared = crate::ct::ct_modpow_biguint(&dk.dk_pub, &r, &pk.params.p)?;
+    let mut shared = ct_modpow_biguint_to_boxed(&dk.dk_pub, &r, &pk.params.p)?;
 
     // Derive keystream from the shared secret
     let keystream = derive_keystream(&shared, covert_msg.len(), &pk.params.p);
+    shared.zeroize();
 
     // XOR covert message with keystream
     let covert_encrypted: Vec<u8> = covert_msg
@@ -349,8 +351,8 @@ pub fn aencrypt_xor(
 /// Uses SHA-256 to hash the shared point and returns the first byte.
 /// This is the extraction function used by both sender (rejection sampling)
 /// and receiver (direct extraction).
-pub(crate) fn shared_to_byte(shared: &BigUint, p: &BigUint) -> u8 {
-    let mut shared_bytes = shared.to_bytes_be();
+pub(crate) fn shared_to_byte(shared: &BoxedUint, p: &BigUint) -> u8 {
+    let mut shared_bytes = shared.to_be_bytes();
     let width = ((p.bits() + 7) / 8) as usize;
     let mut padded = vec![0u8; width];
     if shared_bytes.len() <= width {
@@ -365,8 +367,8 @@ pub(crate) fn shared_to_byte(shared: &BigUint, p: &BigUint) -> u8 {
 /// Derive a keystream of `length` bytes from a DH shared secret.
 ///
 /// Uses SHA-256 in counter mode: `keystream[i..i+32] = SHA-256(shared || counter)`.
-pub(crate) fn derive_keystream(shared: &BigUint, length: usize, p: &BigUint) -> Vec<u8> {
-    let mut shared_bytes = shared.to_bytes_be();
+pub(crate) fn derive_keystream(shared: &BoxedUint, length: usize, p: &BigUint) -> Vec<u8> {
+    let mut shared_bytes = shared.to_be_bytes();
     let width = ((p.bits() + 7) / 8) as usize;
     let mut padded = vec![0u8; width];
     if shared_bytes.len() <= width {
@@ -503,7 +505,7 @@ mod tests {
             aencrypt_xor_legacy(&pk, &dk, b"hi", covert_msg).expect("aencrypt_xor");
 
         // Receiver computes shared secret: c1^dk mod p
-        let shared = dk.shared_secret(&ct.c1, &pk.params.p);
+        let shared = dk.shared_secret_boxed(&ct.c1, &pk.params.p);
         let keystream = derive_keystream(&shared, covert_msg.len(), &pk.params.p);
         let recovered: Vec<u8> = covert_encrypted
             .iter()
@@ -518,16 +520,16 @@ mod tests {
 
     #[test]
     fn test_derive_keystream_length() {
-        let shared = BigUint::from(12345u32);
         let p = BigUint::from(99999u32);
+        let shared = ct_scalar_from_bytes_mod_q(&[0x30, 0x39], &BigUint::from(65537u32)).expect("shared");
         let ks = derive_keystream(&shared, 100, &p);
         assert_eq!(ks.len(), 100);
     }
 
     #[test]
     fn test_derive_keystream_deterministic() {
-        let shared = BigUint::from(12345u32);
         let p = BigUint::from(99999u32);
+        let shared = ct_scalar_from_bytes_mod_q(&[0x30, 0x39], &BigUint::from(65537u32)).expect("shared");
         let ks1 = derive_keystream(&shared, 64, &p);
         let ks2 = derive_keystream(&shared, 64, &p);
         assert_eq!(ks1, ks2);

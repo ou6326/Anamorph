@@ -5,6 +5,7 @@
 //! exact same PRF key, maintaining security against Chosen Ciphertext Attacks (CCA).
 
 use hmac::{Hmac, KeyInit, Mac};
+use core::fmt;
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -18,12 +19,21 @@ const RATCHET_EXTRACT_SALT: &[u8] = b"anamorph-ec24-ratchet-extract-v1";
 const RATCHET_EXPAND_INFO: &[u8] = b"anamorph-ec24-ratchet-expand-v1";
 
 /// A stateful double key supporting multiple uses via HMAC ratcheting.
-#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct MultiUseDoubleKey {
     /// The current double key state.
     pub current_dk: DoubleKey,
     /// A monotonic counter to enforce forward secrecy / domain separation limit.
     pub use_count: u64,
+}
+
+impl fmt::Debug for MultiUseDoubleKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MultiUseDoubleKey")
+            .field("current_dk", &"<redacted>")
+            .field("use_count", &self.use_count)
+            .finish()
+    }
 }
 
 impl MultiUseDoubleKey {

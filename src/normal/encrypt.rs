@@ -4,8 +4,10 @@
 //! ElGamal.  The message is encoded as a `BigUint` and must satisfy
 //! `1 ≤ m < p`.
 
+use crypto_bigint::BoxedUint;
 use num_bigint::{BigUint, RandBigInt};
 use num_traits::One;
+use zeroize::Zeroize;
 
 use super::keygen::PublicKey;
 use crate::errors::{AnamorphError, Result};
@@ -67,6 +69,21 @@ pub fn decode_message(m: &BigUint) -> Result<Vec<u8>> {
         ));
     }
     Ok(bytes[1..].to_vec())
+}
+
+/// Decode a fixed-width boxed group element back to the original message bytes.
+pub(crate) fn decode_message_boxed(m: &BoxedUint) -> Result<Vec<u8>> {
+    let mut bytes = m.to_be_bytes();
+    let first_nonzero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    let decoded = if first_nonzero >= bytes.len() || bytes[first_nonzero] != 0x01 {
+        Err(AnamorphError::DecryptionFailed(
+            "invalid message encoding: missing 0x01 prefix".into(),
+        ))
+    } else {
+        Ok(bytes[first_nonzero + 1..].to_vec())
+    };
+    bytes.zeroize();
+    decoded
 }
 
 /// Standard ElGamal encryption.

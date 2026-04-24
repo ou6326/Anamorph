@@ -12,6 +12,7 @@
 //! | [`adecrypt_xor`] | `aencrypt_xor` | Direct (DH + XOR) |
 
 use num_bigint::BigUint;
+use zeroize::Zeroize;
 
 use crate::ct::{ct_eq_biguint_fixed, ct_modpow_boxed};
 use crate::errors::{AnamorphError, Result};
@@ -165,8 +166,9 @@ pub fn adecrypt_stream_legacy(
     // Extract one covert byte per ciphertext.
     let mut covert_bytes = Vec::with_capacity(cts.len());
     for ct in cts {
-        let shared = dk.shared_secret(&ct.c1, &sk.params.p);
+        let mut shared = dk.shared_secret_boxed(&ct.c1, &sk.params.p);
         let covert_byte = shared_to_byte(&shared, &sk.params.p);
+        shared.zeroize();
         covert_bytes.push(covert_byte);
     }
 
@@ -250,10 +252,11 @@ pub fn adecrypt_xor_legacy(
     let normal_msg = decrypt_legacy(sk, ct)?;
 
     // Compute shared secret: c1^dk mod p
-    let shared = dk.shared_secret(&ct.c1, &sk.params.p);
+    let mut shared = dk.shared_secret_boxed(&ct.c1, &sk.params.p);
 
     // Derive keystream and XOR to recover covert message
     let keystream = derive_keystream(&shared, covert_encrypted.len(), &sk.params.p);
+    shared.zeroize();
     let covert_msg: Vec<u8> = covert_encrypted
         .iter()
         .zip(keystream.iter())

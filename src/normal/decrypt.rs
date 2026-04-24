@@ -6,11 +6,13 @@
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
 
-use crate::ct::ct_modpow_boxed;
+use zeroize::Zeroize;
+
+use crate::ct::{ct_modpow_biguint_to_boxed, ct_modpow_boxed_to_boxed};
 use crate::errors::{AnamorphError, Result};
 use crate::hardening::{verify_mac, MAC_SIZE};
 use crate::padding::unpad_pkcs7;
-use super::encrypt::{decode_message, Ciphertext};
+use super::encrypt::{decode_message_boxed, Ciphertext};
 use super::keygen::SecretKey;
 
 pub(crate) fn verify_and_extract_any_packet_body<'a>(
@@ -65,8 +67,10 @@ pub(crate) fn verify_and_extract_packet_body<'a>(
 ///
 /// Returns the original plaintext bytes.
 pub fn decrypt_legacy(sk: &SecretKey, ct: &Ciphertext) -> Result<Vec<u8>> {
-    let m = decrypt_to_element(sk, ct)?;
-    decode_message(&m)
+    let mut m = decrypt_to_element_boxed(sk, ct)?;
+    let plaintext = decode_message_boxed(&m);
+    m.zeroize();
+    plaintext
 }
 
 /// Decrypt a packet produced by [`super::encrypt::encrypt`].
@@ -113,19 +117,39 @@ pub fn decrypt(
 /// Exposed for the anamorphic layer which needs the raw element for
 /// covert-message extraction.
 pub fn decrypt_to_element(sk: &SecretKey, ct: &Ciphertext) -> Result<BigUint> {
+    let mut m = decrypt_to_element_boxed(sk, ct)?;
+    let mut bytes = m.to_be_bytes();
+    let out = BigUint::from_bytes_be(&bytes);
+    bytes.zeroize();
+    m.zeroize();
+    Ok(out)
+}
+
+fn decrypt_to_element_boxed(sk: &SecretKey, ct: &Ciphertext) -> Result<crypto_bigint::BoxedUint> {
     let p = &sk.params.p;
 
     // s = c1^x mod p
-    let s = ct_modpow_boxed(&ct.c1, &sk.x, p)?;
+    let mut s = ct_modpow_boxed_to_boxed(&ct.c1, &sk.x, p)?;
 
     // s_inv = s^{p-2} mod p  (by Fermat's little theorem, since p is prime)
     let p_minus_2 = p - BigUint::from(2u32);
-    let s_inv = crate::ct::ct_modpow_biguint(&s, &p_minus_2, p)?;
+    let mut s_bytes = s.to_be_bytes();
+    let s_big = BigUint::from_bytes_be(&s_bytes);
+    s_bytes.zeroize();
+    s.zeroize();
+    let mut s_inv = ct_modpow_biguint_to_boxed(&s_big, &p_minus_2, p)?;
 
     // Use constant-time modular multiplication to protect the secret `s_inv`
-    let m = crate::ct::ct_mul_mod_biguint(&ct.c2, &s_inv, p)?;
+    let mut s_inv_bytes = s_inv.to_be_bytes();
+    let s_inv_big = BigUint::from_bytes_be(&s_inv_bytes);
+    s_inv_bytes.zeroize();
+    s_inv.zeroize();
+    let m = crate::ct::ct_mul_mod_biguint_to_boxed(&ct.c2, &s_inv_big, p)?;
 
-    if m.is_zero() || m == BigUint::one() {
+    let mut check_bytes = m.to_be_bytes();
+    let check_big = BigUint::from_bytes_be(&check_bytes);
+    check_bytes.zeroize();
+    if check_big.is_zero() || check_big == BigUint::one() {
         // Sanity check — valid encoded messages have the 0x01 prefix,
         // so the decoded element is always > 1.
         // m=0 would indicate an invalid ciphertext.

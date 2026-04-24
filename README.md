@@ -36,8 +36,8 @@ The scheme provides a **covert communication channel** hidden inside syntactical
 - Full **Normal Mode** and **Anamorphic Mode** (EC22 base scheme + EC24 extension)
 - **Multi-use double keys** — resolving the one-shot limitation of EC22
 - **Covert-message presence indicator** — PRF-mode packets can be checked for a candidate covert payload, while normal packets cleanly report no covert payload
-- **HMAC-SHA256 MAC helpers** — hardened generation and verification primitives
-- **Constant-time helper module** for secret-dependent operations
+- **HMAC-SHA256 MAC helpers** — dedicated generation and verification primitives for authenticated packet handling and ciphertext-tampering detection
+- **Constant-time helper module** for selected secret-dependent operations
 - **Block-padding** support for length-oracle mitigation
 - Empirical **benchmarks** measuring anamorphic overhead vs. covert payload size
 
@@ -67,7 +67,7 @@ Two coercion types are formally characterised:
 
 Under both coercion types, the normal-mode ciphertext remains syntactically and semantically indistinguishable from a ciphertext that carries no covert payload. The adversary cannot distinguish the two cases even with full key material.
 
-**CCA Vulnerability Surface:** The implementation formally characterises the anamorphic-CCA attack surface of the ElGamal construction and evaluates whether HMAC-SHA256 MAC verification closes the gap identified in recent literature.
+**CCA Vulnerability Surface:** The implementation studies the anamorphic-CCA attack surface of the ElGamal construction and evaluates how HMAC-SHA256 MAC verification reduces the practical tampering surface discussed in recent literature.
 
 ---
 
@@ -191,18 +191,18 @@ All security-critical logic is in Rust. Python is used exclusively for benchmark
 
 | Crate                                                         | Version | Purpose                                                                                                   | Reference                                 |
 | ------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| [`crypto-bigint`](https://crates.io/crates/crypto-bigint)     | `0.7`   | Constant-width big integers for hardened modular arithmetic                                               | [docs.rs](https://docs.rs/crypto-bigint) |
+| [`crypto-bigint`](https://crates.io/crates/crypto-bigint)     | `0.7`   | Constant-width big integers for selected hardened modular-arithmetic paths                                              | [docs.rs](https://docs.rs/crypto-bigint) |
 | [`crypto-primes`](https://crates.io/crates/crypto-primes)     | `0.7`   | Safe-prime generation utilities                                                                           | [docs.rs](https://docs.rs/crypto-primes) |
 | [`num-bigint`](https://crates.io/crates/num-bigint)           | `0.4`   | Arbitrary-precision integer operations and random sampling integration                                    | [docs.rs](https://docs.rs/num-bigint)    |
 | [`num-traits`](https://crates.io/crates/num-traits)           | `0.2`   | Numeric trait support                                                       | [docs.rs](https://docs.rs/num-traits)    |
 | [`num-integer`](https://crates.io/crates/num-integer)         | `0.1`   | Integer helper traits (e.g., parity checks)                                                              | [docs.rs](https://docs.rs/num-integer)   |
 | [`rand`](https://crates.io/crates/rand)                       | `0.8`   | Cryptographically secure RNG plumbing for keygen/encryption randomness                                   | [docs.rs](https://docs.rs/rand)          |
 | [`getrandom`](https://crates.io/crates/getrandom)             | `0.4`   | OS entropy source access (`sys_rng`)                                                                      | [docs.rs](https://docs.rs/getrandom)     |
-| [`hmac`](https://crates.io/crates/hmac)                       | `0.13`  | HMAC-SHA256 MAC generation and verification for anamorphic-CCA hardening                                                  | [docs.rs](https://docs.rs/hmac)          |
+| [`hmac`](https://crates.io/crates/hmac)                       | `0.13`  | HMAC-SHA256 MAC generation and verification for authenticated packet handling and tampering detection                                                  | [docs.rs](https://docs.rs/hmac)          |
 | [`sha2`](https://crates.io/crates/sha2)                       | `0.11`  | SHA-256 hash implementation used by the HMAC layer                                                       | [docs.rs](https://docs.rs/sha2)          |
-| [`subtle`](https://crates.io/crates/subtle)                   | `2.5`   | Constant-time comparison, conditional selection, and equality across secret-dependent paths              | [docs.rs](https://docs.rs/subtle)        |
+| [`subtle`](https://crates.io/crates/subtle)                   | `2.5`   | Constant-time comparison, conditional selection, and equality in selected secret-dependent paths              | [docs.rs](https://docs.rs/subtle)        |
 | [`block-padding`](https://crates.io/crates/block-padding)     | `0.4`   | PKCS#7 padding utilities                                                              | [docs.rs](https://docs.rs/block-padding) |
-| [`zeroize`](https://crates.io/crates/zeroize)                 | `1.7`   | Secure overwrite of private keys, ephemeral exponents, and derived secrets                               | [docs.rs](https://docs.rs/zeroize)       |
+| [`zeroize`](https://crates.io/crates/zeroize)                 | `1.7`   | Secure overwrite support for private keys, ephemeral exponents, and selected derived secrets                               | [docs.rs](https://docs.rs/zeroize)       |
 | [`argon2`](https://crates.io/crates/argon2)                   | `0.5`   | Memory-hard KDF for deriving anamorphic double-key material                                              | [docs.rs](https://docs.rs/argon2)        |
 | [`serde` (optional)](https://crates.io/crates/serde)          | `1`     | Optional serialization support for key/ciphertext transport                                              | [docs.rs](https://docs.rs/serde)         |
 
@@ -360,7 +360,7 @@ make clean       # Clean build artefacts
 | ----------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Gururam Subramanian** | z5636559 | **Core Cryptography** — Full Normal Mode (`Gen`, `Enc`, `Dec`) and Anamorphic Mode (`aGen`, `aEnc`, `aDec`) for both EC22 base scheme and EC24 extension. Owns all group arithmetic and the double-key protocol.                          |
 | **Jenny Tien**          | z5265309 | **Formal Analysis & Documentation** — IND-CPA anamorphic security reduction. Formal threat model for Type-1 and Type-2 coercion. EC22 vs. EC24 robustness comparison. Architectural README.                                               |
-| **Owen Ouyang**         | z5523864 | **Security Hardening** — Safe prime selection, generator validation, group membership checks, CSPRNG integration, constant-time enforcement via `subtle`, HMAC-SHA256 MAC primitives, block-padding. CCA vulnerability surface analysis. |
+| **Owen Ouyang**         | z5523864 | **Security Hardening** — Safe prime selection, generator validation, group membership checks, CSPRNG integration, constant-time hardening via `subtle` and `crypto-bigint`, HMAC-SHA256 MAC primitives, block-padding, and CCA vulnerability surface analysis. |
 | **Matthew Wang**        | z5589818 | **Testing & Benchmarking** — Full test suite for normal and anamorphic modes, edge cases, coercion simulation. Criterion benchmarking scripts. `proptest` indistinguishability harness. Overhead linearity verification.                  |
 
 ---

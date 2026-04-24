@@ -95,11 +95,8 @@ pub fn ct_eq_biguint_fixed(a: &BigUint, b: &BigUint, width: usize) -> Choice {
 /// constant-time Montgomery path, so the Montgomery computation sees a fixed-size input.
 /// The surrounding `BigUint` conversion is still variable-time.
 pub fn ct_modpow_biguint(base: &BigUint, exponent: &BigUint, modulus: &BigUint) -> Result<BigUint> {
-    let width = ((modulus.bits() as usize + 7) / 8).max(1);
-    let mut exp = boxed_uint_from_biguint_fixed(exponent, width)?;
-    let result = ct_modpow_boxed(base, &exp, modulus);
-    exp.zeroize();
-    result
+    let mut result = ct_modpow_biguint_to_boxed(base, exponent, modulus)?;
+    Ok(boxed_uint_to_biguint(&mut result))
 }
 
 /// Constant-time modular exponentiation using Montgomery parameters.
@@ -110,6 +107,29 @@ pub fn ct_modpow_biguint(base: &BigUint, exponent: &BigUint, modulus: &BigUint) 
 /// The final conversion back to `BigUint` uses a variable-time byte trim for
 /// interoperability with existing call sites.
 pub fn ct_modpow_boxed(base: &BigUint, exponent: &BoxedUint, modulus: &BigUint) -> Result<BigUint> {
+    let mut result = ct_modpow_boxed_to_boxed(base, exponent, modulus)?;
+    Ok(boxed_uint_to_biguint(&mut result))
+}
+
+/// Constant-time modular exponentiation returning a zeroizable boxed integer.
+pub fn ct_modpow_biguint_to_boxed(
+    base: &BigUint,
+    exponent: &BigUint,
+    modulus: &BigUint,
+) -> Result<BoxedUint> {
+    let width = ((modulus.bits() as usize + 7) / 8).max(1);
+    let mut exp = boxed_uint_from_biguint_fixed(exponent, width)?;
+    let result = ct_modpow_boxed_to_boxed(base, &exp, modulus);
+    exp.zeroize();
+    result
+}
+
+/// Constant-time modular exponentiation returning a zeroizable boxed integer.
+pub fn ct_modpow_boxed_to_boxed(
+    base: &BigUint,
+    exponent: &BoxedUint,
+    modulus: &BigUint,
+) -> Result<BoxedUint> {
     let width = ((modulus.bits() as usize + 7) / 8).max(1);
     let mut mod_boxed = boxed_uint_from_biguint_fixed(modulus, width)?;
     let mod_odd = Option::from(mod_boxed.to_odd())
@@ -126,13 +146,10 @@ pub fn ct_modpow_boxed(base: &BigUint, exponent: &BoxedUint, modulus: &BigUint) 
     let out = BoxedMontyForm::new(base_boxed, &params)
         .pow(&exp_normalized)
         .retrieve();
-    let mut out_bytes = out.to_be_bytes();
-    let result = BigUint::from_bytes_be(&out_bytes);
-    out_bytes.zeroize();
     exp_normalized.zeroize();
     mod_boxed.zeroize();
 
-    Ok(result)
+    Ok(out)
 }
 
 /// Constant-time modular multiplication: `(a * b) mod modulus`.
@@ -142,6 +159,16 @@ pub fn ct_modpow_boxed(base: &BigUint, exponent: &BoxedUint, modulus: &BigUint) 
 /// values of `a` and `b`. The surrounding `BigUint` conversions are
 /// variable-time.
 pub fn ct_mul_mod_biguint(a: &BigUint, b: &BigUint, modulus: &BigUint) -> Result<BigUint> {
+    let mut result = ct_mul_mod_biguint_to_boxed(a, b, modulus)?;
+    Ok(boxed_uint_to_biguint(&mut result))
+}
+
+/// Constant-time modular multiplication returning a zeroizable boxed integer.
+pub fn ct_mul_mod_biguint_to_boxed(
+    a: &BigUint,
+    b: &BigUint,
+    modulus: &BigUint,
+) -> Result<BoxedUint> {
     let width = ((modulus.bits() as usize + 7) / 8).max(1);
 
     let mut a_boxed = boxed_uint_from_biguint_fixed(a, width)?;
@@ -155,14 +182,11 @@ pub fn ct_mul_mod_biguint(a: &BigUint, b: &BigUint, modulus: &BigUint) -> Result
         .ok_or_else(|| AnamorphError::InvalidParameter("modulus must be non-zero".to_string()))?;
     let result_boxed = a_boxed.mul_mod(&b_boxed, &mod_nz);
 
-    let mut out_bytes = result_boxed.to_be_bytes();
-    let result = BigUint::from_bytes_be(&out_bytes);
-    out_bytes.zeroize();
     a_boxed.zeroize();
     b_boxed.zeroize();
     mod_boxed.zeroize();
 
-    Ok(result)
+    Ok(result_boxed)
 }
 
 /// Derive a scalar in `[1, q-1]` directly from bytes.
@@ -194,7 +218,7 @@ pub fn ct_scalar_from_bytes_mod_q(bytes: &[u8], q: &BigUint) -> Result<BoxedUint
     let copy_len = bytes.len();
     wide_fixed[wide_width - copy_len..].copy_from_slice(bytes);
 
-    let wide = BoxedUint::from_be_slice(&wide_fixed, wide_bits)
+    let mut wide = BoxedUint::from_be_slice(&wide_fixed, wide_bits)
         .map_err(|_| AnamorphError::InvalidParameter("invalid scalar input bytes".to_string()))?;
     wide_fixed.zeroize();
 
@@ -202,9 +226,11 @@ pub fn ct_scalar_from_bytes_mod_q(bytes: &[u8], q: &BigUint) -> Result<BoxedUint
     let q_nz = NonZero::new(q_boxed)
         .ok_or_else(|| AnamorphError::InvalidParameter("q must be non-zero".to_string()))?;
 
-    let reduced = wide.rem(&q_nz);
+    let mut reduced = wide.rem(&q_nz);
+    wide.zeroize();
     let one = BoxedUint::one_with_precision(wide_bits);
-    let mapped = reduced.ct_select(&one, reduced.is_zero());
+    let mut mapped = reduced.ct_select(&one, reduced.is_zero());
+    reduced.zeroize();
 
     // Return with q's native precision for downstream modular exponentiation paths.
     let mut mapped_bytes = mapped.to_be_bytes();
@@ -213,8 +239,17 @@ pub fn ct_scalar_from_bytes_mod_q(bytes: &[u8], q: &BigUint) -> Result<BoxedUint
     let start = mapped_len.saturating_sub(q_width);
     let out = boxed_uint_from_be_bytes_fixed(&mapped_bytes[start..], q_width)?;
     mapped_bytes.zeroize();
+    mapped.zeroize();
 
     Ok(out)
+}
+
+fn boxed_uint_to_biguint(value: &mut BoxedUint) -> BigUint {
+    let mut bytes = value.to_be_bytes();
+    let result = BigUint::from_bytes_be(&bytes);
+    bytes.zeroize();
+    value.zeroize();
+    result
 }
 
 /// Convert a `BigUint` into a fixed-width `BoxedUint` using big-endian bytes.

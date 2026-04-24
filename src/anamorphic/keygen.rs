@@ -8,6 +8,7 @@
 //! restriction to allow multi-use double keys.
 
 use crypto_bigint::{BoxedUint, NonZero, RandomMod};
+use core::fmt;
 use num_bigint::BigUint;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -36,7 +37,7 @@ use crate::params::{generate_group_params, GroupParams, InfallibleSysRng};
 /// ciphertext `(c1, ...)` as:
 /// - Sender:   `shared = dk_pub^r = g^(dk·r) mod p`
 /// - Receiver: `shared = c1^dk = g^(r·dk) mod p`
-#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct DoubleKey {
     /// The double-key secret exponent in `[1, q-1]`.
     pub dk: BoxedUint,
@@ -46,6 +47,15 @@ pub struct DoubleKey {
     /// for covert-message encryption.
     #[zeroize(skip)]
     pub dk_pub: BigUint,
+}
+
+impl fmt::Debug for DoubleKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DoubleKey")
+            .field("dk", &"<redacted>")
+            .field("dk_pub", &self.dk_pub)
+            .finish()
+    }
 }
 
 impl DoubleKey {
@@ -60,6 +70,12 @@ impl DoubleKey {
     /// Both arrive at `g^(dk·r) mod p`.
     pub fn shared_secret(&self, ephemeral: &BigUint, p: &BigUint) -> BigUint {
         ct_modpow_boxed(ephemeral, &self.dk, p).expect("valid DH parameters")
+    }
+
+    /// Compute the DH shared secret while keeping the result in a zeroizable representation.
+    pub fn shared_secret_boxed(&self, ephemeral: &BigUint, p: &BigUint) -> BoxedUint {
+        crate::ct::ct_modpow_boxed_to_boxed(ephemeral, &self.dk, p)
+            .expect("valid DH parameters")
     }
 }
 

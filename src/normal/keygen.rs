@@ -4,6 +4,7 @@
 //! where `x` is uniformly random in `[1, q-1]`.
 
 use crypto_bigint::{BoxedUint, NonZero, RandomMod};
+use core::fmt;
 use num_bigint::BigUint;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -23,13 +24,22 @@ pub struct PublicKey {
 /// ElGamal secret key.
 ///
 /// `x` is zeroized on drop.
-#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SecretKey {
     /// Underlying group parameters (p, q, g).
     #[zeroize(skip)]
     pub params: GroupParams,
     /// Secret exponent in `[1, q-1]`.
     pub x: BoxedUint,
+}
+
+impl fmt::Debug for SecretKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecretKey")
+            .field("params", &self.params)
+            .field("x", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Standard ElGamal key generation.
